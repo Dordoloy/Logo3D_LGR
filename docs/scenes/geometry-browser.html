@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<title>Three.js Geometry Browser</title>
+		<style>
+			@font-face {
+				font-family: 'inconsolata';
+				src: url('../files/inconsolata.woff') format('woff');
+				font-weight: normal;
+				font-style: normal;
+			}
+
+			body {
+				margin:0;
+				font-family: 'inconsolata';
+				font-size: 15px;
+				line-height: 18px;
+				overflow: hidden;
+			}
+
+			canvas { width: 100%; height: 100% }
+
+			#newWindow {
+				display: block;
+				position: absolute;
+				bottom: 0.3em;
+				left: 0.5em;
+				color: #fff;
+			}
+		</style>
+	</head>
+	<body>
+
+		<a id='newWindow' href='./geometry-browser.html' target='_blank'>Open in New Window</a>
+
+		<script src="../../build/three.min.js"></script>
+		<script src="../../build/three.js"></script>
+		<script src='../../examples/js/libs/dat.gui.min.js'></script>
+		<script src="../../examples/js/controls/OrbitControls.js"></script>
+		<script src="../../examples/js/controls/TrackballControls.js"></script>
+		<script src="../../examples/js/loaders/GLTFLoader.js"></script>
+		<script src="../../examples/js/ParametricGeometries.js"></script>
+		<script src="../../examples/js/modifiers/NotreBendModifier.js"></script>
+		<script src="../../examples/js/geometries/LightningStrike.js"></script>
+		<script src="../../examples/js/SimplexNoise.js"></script>
+		<script src="../../examples/js/GPUParticleSystem.js"></script>
+		<script src="../../examples/js/objects/LightningStorm.js"></script>
+		<script src="../../examples/js/objects/ShadowMesh.js"></script>
+		<script src='js/geometry.js'></script>
+		<script src="../../examples/js/shaders/CopyShader.js"></script>
+		<script src="../../examples/js/postprocessing/EffectComposer.js"></script>
+		<script src="../../examples/js/postprocessing/RenderPass.js"></script>
+		<script src="../../examples/js/postprocessing/ShaderPass.js"></script>
+		<script src="../../examples/js/postprocessing/OutlinePass.js"></script>
+		<script src="../../examples/js/shaders/BokehShader2.js"></script>
+		<script src="../../examples/js/cameras/CinematicCamera.js"></script>
+		<script src="../../examples/js/objects/Sky.js"></script>
+
+		<script src="../../examples/js/WebGL.js"></script>
+		<script src="../../examples/js/libs/stats.min.js"></script>
+		<script type="x-shader/x-vertex" id="vertexShader">
+			#include <common>
+
+		uniform float speed;
+		uniform float time;
+		uniform float timeOffset;
+		varying vec2 vUv;
+		varying float vAlpha;
+		varying vec3 vWorldPosition;
+		void main() {
+
+			vec3 pos = position;
+
+			float l = ( time * speed * 0.01 ) + timeOffset;
+			float f = fract( l ); // linear time factor [0,1)
+			float a = f * f; // quadratic time factor [0,1)
+
+			// slightly animate the vertices of light shaft if necessary
+
+			// pos.x += cos( l * 20.0 ) * sin( l * 10.0 );
+
+			vAlpha = saturate( 0.7 + min( 1.0, a * 10.0 ) * ( sin( a * 40.0 ) * 0.25 ) );
+
+		  	vUv = uv;
+
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( pos, 1.0 );
+
+
+			vec4 worldPosition = modelMatrix * vec4( position, 1.0 );
+			vWorldPosition = worldPosition.xyz;
+
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+
+		}
+
+		</script>
+		<script type="x-shader/x-fragment" id="fragmentShader">
+
+		uniform float attenuation;
+		uniform vec3 color;
+		uniform sampler2D texture;
+
+		varying vec2 vUv;
+		varying float vAlpha;
+
+		uniform vec3 topColor;
+		uniform vec3 bottomColor;
+		uniform float offset;
+		uniform float exponent;
+
+		varying vec3 vWorldPosition;
+
+		void main() {
+
+			vec4 textureColor = texture2D( texture, vUv );
+			gl_FragColor = vec4( textureColor.rgb * color.rgb, textureColor.a * vAlpha );
+			gl_FragColor.a *= pow( gl_FragCoord.z, attenuation );
+
+			float h = normalize( vWorldPosition + offset ).y;
+			gl_FragColor = vec4( mix( bottomColor, topColor, max( pow( max( h , 0.0), exponent ), 0.0 ) ), 1.0 );
+
+		}
+
+		</script>
+
+		<script>
+
+			document.getElementById( 'newWindow' ).href += window.location.hash;
+
+			/***************
+				CAMERA
+			***************/
+
+			var cameraPos0   // initial camera position
+			var cameraUp0    // initial camera up
+			var cameraZoom   // camera zoom
+			var iniQ         // initial quaternion
+			var endQ         // target quaternion
+			var curQ         // temp quaternion during slerp
+			var vec3         // generic vector object
+			var tweenValue   // tweenable value 
+			var camera, scene, raycaster, renderer, stats;
+			var radius = 40, theta = 0;
+
+
+			var camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.1, 2000000 );
+			camera.position.z = 30;
+			// camera.setLens( 5 );
+			camera.position.set( -20, 1, 50 );
+		
+			/*******************
+				END CAMERA
+			*******************/
+
+			var currentTime = 0;
+			var currentTime2 = 0;
+			// var gui = new dat.GUI();	
+			var scene = new THREE.Scene();
+
+			// cree le gestionnaire de rendu
+				var renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				// renderer.setClearColor( 0x000000, 1 );
+				// renderer.setClearColor( 0x0a47aa, 1 );
+				// renderer.gammaInput = true;
+				// renderer.gammaOutput = true;
+				document.body.appendChild( renderer.domElement );
+
+			// direction cam
+				var orbit = new THREE.OrbitControls( camera, renderer.domElement );
+				orbit.enableZoom = true;
+
+			// la clock d'animation
+				clock = new THREE.Clock();
+			//Rend les shadow possible
+				renderer.shadowMap.enabled = true;
+			// les lumières de la scene
+				var lights = [];
+				// lights[ 0 ] = new THREE.PointLight( 0xea0707, 1, 0  );
+				// lights[ 1 ] = new THREE.PointLight( 0x0d5bd8, 1, 0 );
+				// lights[ 2 ] = new THREE.PointLight( 0x17ea04, 1, 0 );
+				lights[ 0 ] = new THREE.PointLight( 0xffffff, 1, 0 );
+				lights[ 1 ] = new THREE.PointLight( 0xffffff, 1, 0 );
+				lights[ 2 ] = new THREE.PointLight( 0xffffff, 1, 0 );
+
+				lights[ 0 ].position.set( 0, 40, 0 );
+				lights[ 1 ].position.set( 5, 15, 20 );
+				lights[ 2 ].position.set( - 10, - 20, - 10 );
+				lights[ 0 ].castShadow = false; 
+				lights[ 1 ].castShadow = true; 
+				lights[ 2 ].castShadow = false; 
+
+				// scene.add( lights[ 0 ] );
+				// scene.add( lights[ 1 ] );
+				// scene.add( lights[ 2 ] );	
+
+
+			// creation d'un groupe
+				var group = new THREE.Group()
+
+			// Création de le Geometry Box
+				var TxtGeometry = new THREE.BoxGeometry( (15, 8, 3, 200, 10, 4) );
+				TxtGeometry.dynamic = true; //permet changement dynamic
+
+			// les materiaux de la scene
+				var lineMaterial = new THREE.LineBasicMaterial( { color: 0xffffff, transparent: true, opacity: 0.5 } );
+				var meshMaterial = new THREE.MeshStandardMaterial( 
+					{	color: 0xE7ED50, 
+						emissive: 0xFF6A00, 
+						roughness: 1,
+					  	side: THREE.DoubleSide, 
+					  	flatShading: true } );
+
+			// Le texte
+				group.add( new THREE.LineSegments( TxtGeometry, lineMaterial ) );
+				var Txt3D = new THREE.Mesh( TxtGeometry, meshMaterial );
+
+
+	    	towerMaterial = new THREE.MeshStandardMaterial( {
+
+				color: 0xE7ED50,
+				side: THREE.DoubleSide
+
+			} );
+
+
+
+	    	/***************
+	    		  SKY
+	    	***************/
+			scene.background = new THREE.Color().setHSL( 0.6, 0, 1 );
+			scene.fog = new THREE.Fog( scene.background, 1, 5000 );
+
+			hemiLight = new THREE.HemisphereLight( 0xffffff, 0xffffff, 0.6 );
+			hemiLight.color.setHSL( 0.6, 1, 0.6 );
+			hemiLight.groundColor.setHSL( 0.095, 1, 0.75  );
+			hemiLight.position.set( 0, 50, 0 );
+			// group.add( hemiLight );
+
+			hemiLightHelper = new THREE.HemisphereLightHelper( hemiLight, 10 );
+			// group.add( hemiLightHelper );
+
+			var groundGeo = new THREE.PlaneBufferGeometry( 10000, 10000 );
+			var groundMat = new THREE.MeshStandardMaterial( { color: 0x777777, roughness: 0.9} );
+			// groundMat.color.setHSL( 0x867d8c );
+
+			dirLight = new THREE.DirectionalLight( 0xffffff, 1 );
+			dirLight.color.setHSL( 0.1, 1, 0.95 );
+			dirLight.position.set(  5, 10, 15 );
+			dirLight.position.multiplyScalar( 30 );
+			group.add( dirLight );
+
+			dirLight.castShadow = true;
+
+			dirLight.shadow.mapSize.width = 2048;
+			dirLight.shadow.mapSize.height = 2048;
+
+			var d = 50;
+
+			dirLight.shadow.camera.left = - d;
+			dirLight.shadow.camera.right = d;
+			dirLight.shadow.camera.top = d;
+			dirLight.shadow.camera.bottom = - d;
+
+			dirLight.shadow.camera.far = 3500;
+			dirLight.shadow.bias = - 0.0001;
+
+			dirLightHeper = new THREE.DirectionalLightHelper( dirLight, 10 );
+			// group.add( dirLightHeper );
+
+			var ground = new THREE.Mesh( groundGeo, groundMat );
+			ground.position.y = -10;
+			ground.rotation.x = - Math.PI / 2;
+			ground.receiveShadow = true;
+			group.add( ground );
+
+			var vertexShader = document.getElementById( 'vertexShader' ).textContent;
+			var fragmentShader = document.getElementById( 'fragmentShader' ).textContent;
+			var uniforms = {
+				"topColor": { value: new THREE.Color( 0x0077ff ) },
+				"bottomColor": { value: new THREE.Color( 0xffffff ) },
+				"offset": { value: 33 },
+				"exponent": { value: 0.6 }
+			};
+			uniforms[ "topColor" ].value.copy( hemiLight.color );
+
+			scene.fog.color.copy( uniforms[ "bottomColor" ].value );
+
+			var skyGeo = new THREE.SphereBufferGeometry( 4000, 32, 15 );
+			var skyMat = new THREE.ShaderMaterial( {
+				uniforms: uniforms,
+				vertexShader: vertexShader,
+				fragmentShader: fragmentShader,
+				side: THREE.BackSide
+			} );
+
+			var sky = new THREE.Mesh( skyGeo, skyMat );
+			group.add( sky );
+
+	    	/***************
+	    		END SKY
+	    	***************/
+
+
+	    	//Transmission tower
+				var loader = new THREE.GLTFLoader()
+				loader.load(
+				    '../../examples/models/gltf/transmission/scene.gltf',
+				    function(gltf) {
+
+						// var tower = new THREE.Mesh(gltf.scene, towerMaterial);
+				        group.add(gltf.scene)
+						gltf.animations; // Array<THREE.AnimationClip>
+						gltf.scene; // THREE.Scene
+						gltf.scenes; // Array<THREE.Scene>
+						gltf.cameras; // Array<THREE.Camera>
+						gltf.asset; // Object
+						gltf.scene.position.x = 5;
+						gltf.scene.position.y = -6.35;
+						gltf.scene.position.z = 8;	
+						gltf.scene.scale.set(0.7,0.7,0.7)
+
+						gltf.scene.traverse((node) => {
+						  if (node.isMesh) {
+						  	console.log(node);
+						    node.castShadow = true;
+
+						    node.material.color.r = 0.906;
+						    node.material.color.g = 0.929;
+						    node.material.color.b = 0.314;
+
+						    node.material.emissive.r = 1;
+						    node.material.emissive.g = 0.416;
+						    node.material.emissive.b = 0;
+						  }
+						});
+
+				    }
+				)
+
+			//Plane under the text
+				var planeGeometry = new THREE.PlaneGeometry( 90, 75, 32 );
+				var material = new THREE.MeshPhongMaterial( {color: 0x969696, side: THREE.DoubleSide} );
+				var plane = new THREE.Mesh( planeGeometry, material );
+				plane.rotation.x=Math.PI / 2;
+				plane.position.y=-10;
+				// plane.localClippingEnabled = false;
+				plane.receiveShadow = true;
+				// group.add( plane );
+
+				var helper = new THREE.CameraHelper( lights[0].shadow.camera );
+			// scene.add( helper );
+
+			//Les LightShafts
+				var textureLoader = new THREE.TextureLoader();
+				var texture = textureLoader.load( '../../examples/textures/lightShaft.png' );
+
+				uniforms = {
+					// controls how fast the ray attenuates when the camera comes closer
+					attenuation: {
+						value: 10
+					},
+					// controls the speed of the animation
+					speed: {
+						value: 2
+					},
+					// the color of the ray
+					color: {
+						value: new THREE.Color( 0xdadc9f )
+					},
+					// the visual representation of the ray highly depends on the used texture
+					texture: {
+						value: texture
+					},
+					// global time value for animation
+					time: {
+						value: 0
+					},
+					// individual time offset so rays are animated differently if necessary
+					timeOffset: {
+						value: 0
+					}
+				};
+
+				var lightShaftMaterial = new THREE.ShaderMaterial( {
+					uniforms: uniforms,
+					vertexShader: document.getElementById( 'vertexShader' ).textContent,
+					fragmentShader: document.getElementById( 'fragmentShader' ).textContent,
+					blending: THREE.AdditiveBlending,
+					depthWrite: false,
+					transparent: true,
+					side: THREE.DoubleSide
+				} );
+
+				var lightShaftGeometry = new THREE.PlaneBufferGeometry( 5, 50 );
+
+				for ( var i = 0; i < 1; i ++ ) 
+				{
+
+					var lightShaft = new THREE.Mesh( lightShaftGeometry, lightShaftMaterial );
+					lightShaft.position.x = - 1 + 1.5 * Math.sign( ( i % 2 ) );
+					lightShaft.position.x = -3;
+					lightShaft.position.y = 4;
+					lightShaft.position.z = 10 + ( i * 0.5 );
+					lightShaft.rotation.x = Math.PI * 1.2;
+					lightShaft.rotation.y = Math.PI * 1.4;
+					lightShaft.rotation.z = Math.PI * - ( 0.15 + 0.1 * Math.random() );
+					group.add( lightShaft );
+
+				}
+
+
+			/***************
+				LIGHTNING
+			***************/
+
+			var composer;
+			composer = new THREE.EffectComposer( renderer );
+
+			function createOutline( scene, objectsArray, visibleColor ) {
+				// console.log("test")
+				var outlinePass = new THREE.OutlinePass( new THREE.Vector2( window.innerWidth, window.innerHeight ), scene, camera, objectsArray );
+				outlinePass.edgeStrength = 2.5;
+				outlinePass.edgeGlow = 0.7;
+				outlinePass.edgeThickness = 2.8;
+				outlinePass.visibleEdgeColor = visibleColor;
+				outlinePass.hiddenEdgeColor.set( 0 );
+				composer.addPass( outlinePass );
+
+				scene.userData.outlineEnabled = true;
+				
+				return outlinePass;
+
+			}
+			scene.userData.timeRate = 1;
+
+			var conesDistance = 100;
+			var coneHeight = 4;
+			var coneHeightHalf = coneHeight * 0.5;
+
+			var coneMesh1 = new THREE.Mesh( new THREE.ConeBufferGeometry( coneHeight, coneHeight, 30, 1, false ), new THREE.MeshPhongMaterial( { color: 0xFFFF00, emissive: 0x1F1F00 } ) );
+			coneMesh1.rotation.x = Math.PI;
+			coneMesh1.position.y = conesDistance + coneHeight;
+			// group.add( coneMesh1 );
+
+			var coneMesh2 = new THREE.Mesh( coneMesh1.geometry.clone(), new THREE.MeshPhongMaterial( { color: 0xFF2020, emissive: 0x1F0202 } ) );
+			coneMesh2.position.y = coneHeightHalf;
+			// group.add( coneMesh2 );
+
+			coneMesh1.position.z = 10;
+			coneMesh2.position.z = 0;
+
+			scene.userData.lightningMaterial = new THREE.MeshBasicMaterial( { color: 0xE7ED50 } );
+
+			scene.userData.rayParams = {
+				// sourceOffset: new THREE.Vector3(),
+				destOffset: new THREE.Vector3(),
+				radius0: 0.2, 
+				radius1: 0.2,
+				minRadius: 2.5,
+				maxIterations: 7,
+				isEternal: true,
+
+				timeScale: 0.7,
+
+				propagationTimeFactor: 0.05,
+				vanishingTimeFactor: 0.95,
+				subrayPeriod: 3.5,
+				subrayDutyCycle: 0.6,
+				maxSubrayRecursion: 3,
+				ramification: 2,
+				recursionProbability: 0.6,
+
+				roughness: 0.85,
+				straightness: 0.6
+
+			};
+
+			var lightningStrike;
+			var lightningStrikeMesh;
+			var outlineMeshArray = [];
+
+			scene.userData.recreateRay = function () {
+
+				if ( lightningStrikeMesh ) {
+					scene.remove( lightningStrikeMesh );
+				}
+
+				lightningStrike = new THREE.LightningStrike( scene.userData.rayParams );
+				lightningStrikeMesh = new THREE.Mesh( lightningStrike, scene.userData.lightningMaterial );
+
+				outlineMeshArray.length = 0;
+				outlineMeshArray.push( lightningStrikeMesh );
+
+				group.add( lightningStrikeMesh );
+				lightningStrikeMesh.scale.set(0.2,0.2,0.2)
+
+			}
+			scene.userData.recreateRay();
+			lightningStrikeMesh.position.x = -0.75;
+			lightningStrikeMesh.position.y = -3.4;
+			lightningStrikeMesh.position.z = 13.55;
+			// // Compose rendering
+			composer.passes = [];
+			composer.addPass( new THREE.RenderPass( scene, camera ) );
+			createOutline( scene, outlineMeshArray, scene.userData.outlineColor );
+
+			// Controls
+
+				// var controls = new THREE.OrbitControls(camera, renderer.domElement );
+				orbit.enableDamping = true;
+
+				scene.userData.render = function ( time ) {
+					// console.log(time);
+					// Move cones and Update ray position
+					coneMesh1.position.set( Math.sin( 0.5 * time ) * conesDistance * 0.6,  conesDistance + coneHeight, Math.cos( 0.5 * time ) * conesDistance * 0.6 );
+					// coneMesh2.position.set( Math.sin( 0.9 * time ) * conesDistance, coneHeightHalf, 0 );
+					lightningStrike.rayParameters.sourceOffset.copy( coneMesh1.position );
+					lightningStrike.rayParameters.sourceOffset.y -= coneHeightHalf;
+					lightningStrike.rayParameters.destOffset.copy( coneMesh2.position );
+					lightningStrike.rayParameters.destOffset.y += coneHeightHalf;
+
+					lightningStrike.update( time );
+
+					orbit.update();
+
+					// Update point light position to the middle of the ray
+					// posLight.position.lerpVectors( lightningStrike.rayParameters.sourceOffset, lightningStrike.rayParameters.destOffset, 0.5 );
+
+				};
+
+
+			/**********************
+				END LIGHTNING
+			**********************/
+
+
+			var options = chooseFromHash( group, TxtGeometry, meshMaterial, group, scene);
+
+			scene.add( group );
+
+			var timeCamera;
+
+			var prevFog = false;
+			var bool = true;
+			lastCurrentTime = 0;
+
+			//Bouton pause de l'animation
+			document.addEventListener('keypress', onDocumentKeyPress, false);
+			function onDocumentKeyPress()
+			{
+				if((event.key == 'p' || event.key == ' ')  && bool == true)
+				{
+					bool = false;
+					currentTime = 0;
+				}
+				else if((event.key == 'p' || event.key == ' ')  && bool == false)
+				{
+					bool = true;
+					currentTime = 0;
+				}
+			}
+			
+			//stop l'animation au click
+			document.addEventListener( 'mousedown', onDocumentMouseDown, false );
+			function onDocumentMouseDown() 
+			{
+				bool = false;
+				currentTime = 0;
+			}
+
+
+			var render = function () {
+
+				requestAnimationFrame( render );
+
+				if ( ! options.fixed ) {
+
+					group.rotation.x += 0.005;
+					group.rotation.y += 0.005;
+
+				}
+
+				currentTime += scene.userData.timeRate * clock.getDelta();
+
+				if (lastCurrentTime <= 105 && bool == true)
+				{
+					lastCurrentTime += 0.02;
+				}
+				else if(currentTime <= 105 && bool == false)
+				{
+					lastCurrentTime += 0;
+				}
+				else
+				{
+					lastCurrentTime = 0;
+				}
+				// console.log(lastCurrentTime)
+				// console.log(currentTime)
+				currentTime2 = currentTime;
+
+				if ( currentTime < 0 )
+				{
+					currentTime = 0;
+				}
+
+
+				if(currentTime > 30)
+				{
+					bool = true;
+					currentTime = 0;
+				}
+
+
+				if(bool == true)
+				{
+
+					theta += 0.1;
+
+					camera.position.x = -20 * Math.cos( THREE.Math.degToRad( theta ) );
+					camera.position.y = 5 * Math.cos( THREE.Math.degToRad( theta ) );
+					camera.position.z = 50 * Math.sin( THREE.Math.degToRad( theta ) );
+				}
+
+				distance = 1000;
+				test = 0;
+				var phi = 2 * Math.PI * ( lastCurrentTime/100 - 0.5 );
+				var theta2 = Math.PI * ( lastCurrentTime/100 - 0.5 );
+				// console.log(currentTime2);
+
+
+				dirLight.position.x = -distance * Math.cos( phi );
+				dirLight.position.y = distance * Math.sin( phi ) * Math.sin( theta2 );
+				dirLight.position.z = -distance * Math.sin( phi ) * Math.cos( theta2 );
+
+				camera.lookAt( scene.position );
+
+				camera.updateMatrixWorld();
+
+
+
+				scene.userData.render( currentTime );
+			
+				renderer.render( scene, camera );
+
+			};
+			
+
+			window.addEventListener( 'resize', function () {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				composer.setSize( window.innerWidth, window.innerHeight );
+
+			}, false );
+
+			render();
+
+			animate();
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+
+				const delta = clock.getDelta();
+
+				uniforms.time.value += delta;
+
+				renderer.render( scene, camera );
+
+			}
+
+		</script>
+	</body>
+</html>
